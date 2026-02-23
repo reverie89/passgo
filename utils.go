@@ -37,3 +37,19 @@ func randomString(length int) string {
 	}
 	return string(b)
 }
+
+// truncateTailToRunes keeps the right-most maxRunes-1 runes with an ellipsis prefix.
+// Useful for path-like values where the suffix is more meaningful than the prefix.
+func truncateTailToRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	if maxRunes == 1 {
+		return "…"
+	}
+	return "…" + string(r[len(r)-maxRunes+1:])
+}

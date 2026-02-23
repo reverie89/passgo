@@ -14,12 +14,12 @@ import (
 // ─── Snapshot Create Form ──────────────────────────────────────────────────────
 
 type snapCreateModel struct {
-	vmName      string
-	nameInput   textinput.Model
-	descInput   textinput.Model
-	cursor      int // 0=name, 1=desc, 2=create, 3=cancel
-	width       int
-	height      int
+	vmName    string
+	nameInput textinput.Model
+	descInput textinput.Model
+	cursor    int // 0=name, 1=desc, 2=create, 3=cancel
+	width     int
+	height    int
 }
 
 func newSnapCreateModel(vmName string, w, h int) snapCreateModel {
@@ -382,8 +382,14 @@ func (m snapManageModel) View() string {
 		if maxName < 0 {
 			maxName = 0
 		}
-		if len(name) > maxName && maxName > 3 {
-			name = name[:maxName-1] + "…"
+		if maxName <= 0 {
+			name = ""
+		} else if lipgloss.Width(name) > maxName {
+			if maxName == 1 {
+				name = "…"
+			} else {
+				name = truncateToRunes(name, maxName-1)
+			}
 		}
 		nameContent := treePfx + name
 		// Pad to column width
@@ -399,8 +405,12 @@ func (m snapManageModel) View() string {
 		var row string
 		if showComment {
 			comment := entry.snap.Comment
-			if len(comment) > commentColW-1 && commentColW > 4 {
-				comment = comment[:commentColW-3] + "…"
+			if commentColW > 1 && lipgloss.Width(comment) > commentColW-1 {
+				if commentColW <= 2 {
+					comment = "…"
+				} else {
+					comment = truncateToRunes(comment, commentColW-2)
+				}
 			}
 			row = cursor + nameContent + div + cellStyle(commentColW).Render(comment)
 		} else {

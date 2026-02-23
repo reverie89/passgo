@@ -16,13 +16,13 @@ import (
 // ─── Mount Manager ─────────────────────────────────────────────────────────────
 
 type mountManageModel struct {
-	vmName string
-	mounts []MountInfo
-	cursor int
-	action int // -1=list, 0=modify, 1=delete, 2=cancel
+	vmName    string
+	mounts    []MountInfo
+	cursor    int
+	action    int // -1=list, 0=modify, 1=delete, 2=cancel
 	inActions bool
-	width  int
-	height int
+	width     int
+	height    int
 }
 
 func newMountManageModel(vmName string, w, h int) mountManageModel {
@@ -136,12 +136,8 @@ func (m mountManageModel) View() string {
 		selected := i == m.cursor
 		src := mount.SourcePath
 		tgt := mount.TargetPath
-		if len(src) > srcW-2 {
-			src = "…" + src[len(src)-srcW+3:]
-		}
-		if len(tgt) > tgtW-2 {
-			tgt = "…" + tgt[len(tgt)-tgtW+3:]
-		}
+		src = truncateTailToRunes(src, max(1, srcW-2))
+		tgt = truncateTailToRunes(tgt, max(1, tgtW-2))
 
 		style := tableCellStyle
 		if selected {
@@ -196,14 +192,14 @@ func (m mountManageModel) View() string {
 // ─── Mount Add (File picker + Target form) ─────────────────────────────────────
 
 type mountAddModel struct {
-	vmName      string
-	phase       int // 0=browse, 1=target form
+	vmName string
+	phase  int // 0=browse, 1=target form
 	// File browser
-	currentDir  string
-	entries     []os.DirEntry
-	dirCursor   int
-	dirOffset   int
-	showHidden  bool
+	currentDir string
+	entries    []os.DirEntry
+	dirCursor  int
+	dirOffset  int
+	showHidden bool
 	// Target form
 	sourceInput textinput.Model
 	targetInput textinput.Model
@@ -493,13 +489,13 @@ func (m mountAddModel) viewTargetForm() string {
 // ─── Mount Modify ──────────────────────────────────────────────────────────────
 
 type mountModifyModel struct {
-	vmName       string
-	oldMount     MountInfo
-	sourceInput  textinput.Model
-	targetInput  textinput.Model
-	cursor       int // 0=source, 1=target, 2=save, 3=cancel
-	width        int
-	height       int
+	vmName      string
+	oldMount    MountInfo
+	sourceInput textinput.Model
+	targetInput textinput.Model
+	cursor      int // 0=source, 1=target, 2=save, 3=cancel
+	width       int
+	height      int
 }
 
 func newMountModifyModel(vmName string, mount MountInfo, w, h int) mountModifyModel {

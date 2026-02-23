@@ -100,25 +100,37 @@ func parseSnapshots(output string) []SnapshotInfo {
 			continue
 		}
 
-		// Split by whitespace and take first 4 fields
-		fields := strings.Fields(line)
-		if len(fields) >= 2 {
-			snapshot := SnapshotInfo{
-				Instance: fields[0],
-				Name:     fields[1],
-			}
-
-			if len(fields) >= 3 && fields[2] != "--" {
-				snapshot.Parent = fields[2]
-			}
-
-			if len(fields) >= 4 && fields[3] != "--" {
-				snapshot.Comment = fields[3]
-			}
-
+		if snapshot, ok := parseSnapshotLine(line); ok {
 			snapshots = append(snapshots, snapshot)
 		}
 	}
 
 	return snapshots
+}
+
+// parseSnapshotLine parses one data row from `multipass list --snapshots`.
+func parseSnapshotLine(line string) (SnapshotInfo, bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return SnapshotInfo{}, false
+	}
+
+	snapshot := SnapshotInfo{
+		Instance: fields[0],
+		Name:     fields[1],
+	}
+
+	if len(fields) >= 3 && fields[2] != "--" {
+		snapshot.Parent = fields[2]
+	}
+
+	// Comments may contain spaces, so keep the rest of the row.
+	if len(fields) >= 4 {
+		comment := strings.Join(fields[3:], " ")
+		if comment != "--" {
+			snapshot.Comment = comment
+		}
+	}
+
+	return snapshot, true
 }

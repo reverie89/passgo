@@ -30,14 +30,14 @@ var (
 // ─── Table ─────────────────────────────────────────────────────────────────────
 
 var (
-	tableHeaderStyle     lipgloss.Style
-	tableCellStyle       lipgloss.Style
+	tableHeaderStyle       lipgloss.Style
+	tableCellStyle         lipgloss.Style
 	tableSelectedCellStyle lipgloss.Style
-	tableCursorStyle     lipgloss.Style
-	tableEmptyStyle      lipgloss.Style
-	tableBorderStyle     lipgloss.Style
-	tableColDivStyle     lipgloss.Style
-	tableHeaderDivStyle  lipgloss.Style
+	tableCursorStyle       lipgloss.Style
+	tableEmptyStyle        lipgloss.Style
+	tableBorderStyle       lipgloss.Style
+	tableColDivStyle       lipgloss.Style
+	tableHeaderDivStyle    lipgloss.Style
 )
 
 // ─── Footer ────────────────────────────────────────────────────────────────────

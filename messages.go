@@ -2,7 +2,8 @@
 package main
 
 import (
-	"strings"
+	"errors"
+	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -81,18 +82,7 @@ func doFetchVMList() ([]vmData, error) {
 		return nil, err
 	}
 
-	lines := strings.Split(listOutput, "\n")
-	var vmNames []string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.Contains(line, "Name") || strings.Contains(line, "---") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) >= 4 {
-			vmNames = append(vmNames, fields[0])
-		}
-	}
+	vmNames := parseVMNames(listOutput)
 
 	var vms []vmData
 	for _, name := range vmNames {
@@ -194,20 +184,16 @@ func advancedCreateCmd(name, release string, cpus, memoryMB, diskGB int, cloudIn
 // stopAllVMsCmd stops all running VMs.
 func stopAllVMsCmd(names []string) tea.Cmd {
 	return func() tea.Msg {
-		for _, name := range names {
-			_, _ = StopVM(name)
-		}
-		return vmOperationResultMsg{operation: "stop-all"}
+		err := runBulkVMOperation("stop", names, StopVM)
+		return vmOperationResultMsg{operation: "stop-all", err: err}
 	}
 }
 
 // startAllVMsCmd starts all stopped VMs.
 func startAllVMsCmd(names []string) tea.Cmd {
 	return func() tea.Msg {
-		for _, name := range names {
-			_, _ = StartVM(name)
-		}
-		return vmOperationResultMsg{operation: "start-all"}
+		err := runBulkVMOperation("start", names, StartVM)
+		return vmOperationResultMsg{operation: "start-all", err: err}
 	}
 }
 
@@ -283,4 +269,14 @@ func umountCmd(vmName, target string) tea.Cmd {
 		_, err := runMultipassCommand("umount", vmName+":"+target)
 		return vmOperationResultMsg{vmName: vmName, operation: "umount", err: err}
 	}
+}
+
+func runBulkVMOperation(opName string, names []string, operation func(string) (string, error)) error {
+	var opErrs []error
+	for _, name := range names {
+		if _, err := operation(name); err != nil {
+			opErrs = append(opErrs, fmt.Errorf("%s %s: %w", opName, name, err))
+		}
+	}
+	return errors.Join(opErrs...)
 }

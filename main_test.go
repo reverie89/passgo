@@ -100,8 +100,8 @@ vm2                     Stopped           --               Ubuntu 20.04 LTS
 			expected: []string{"vm1", "vm2"},
 		},
 		{
-			name: "only header no VMs",
-			input: `Name                    State             IPv4             Image`,
+			name:     "only header no VMs",
+			input:    `Name                    State             IPv4             Image`,
 			expected: []string{},
 		},
 		{
@@ -188,8 +188,8 @@ vm2         snap2       backup    after-upgrade`,
 			},
 		},
 		{
-			name: "only header line",
-			input: `Instance    Snapshot    Parent    Comment`,
+			name:     "only header line",
+			input:    `Instance    Snapshot    Parent    Comment`,
 			expected: []SnapshotInfo{},
 		},
 		{
@@ -460,30 +460,30 @@ func TestParseVMNamesRobustness(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:     "very long VM name",
-			input:    "Name                    State             IPv4             Image\n" +
+			name: "very long VM name",
+			input: "Name                    State             IPv4             Image\n" +
 				"this-is-a-very-long-vm-name-that-exceeds-normal-length     Running           192.168.64.2     Ubuntu 22.04 LTS",
 			expected: []string{"this-is-a-very-long-vm-name-that-exceeds-normal-length"},
 		},
 		{
-			name:     "VM name with special characters",
-			input:    "Name                    State             IPv4             Image\n" +
+			name: "VM name with special characters",
+			input: "Name                    State             IPv4             Image\n" +
 				"vm-with-dashes          Running           192.168.64.2     Ubuntu 22.04 LTS\n" +
 				"vm_with_underscores     Stopped           --               Ubuntu 20.04 LTS\n" +
 				"vm.with.dots            Running           192.168.64.3     Ubuntu 24.04 LTS",
 			expected: []string{"vm-with-dashes", "vm_with_underscores", "vm.with.dots"},
 		},
 		{
-			name:     "mixed IPv4 formats",
-			input:    "Name                    State             IPv4             Image\n" +
+			name: "mixed IPv4 formats",
+			input: "Name                    State             IPv4             Image\n" +
 				"vm1                     Running           192.168.64.2     Ubuntu 22.04 LTS\n" +
 				"vm2                     Running           10.0.0.5,192.168.1.10  Ubuntu 20.04 LTS\n" +
 				"vm3                     Running           N/A              Ubuntu 24.04 LTS",
 			expected: []string{"vm1", "vm2", "vm3"},
 		},
 		{
-			name:     "extra whitespace between columns",
-			input:    "Name                    State             IPv4             Image\n" +
+			name: "extra whitespace between columns",
+			input: "Name                    State             IPv4             Image\n" +
 				"vm1                     Running           192.168.64.2     Ubuntu 22.04 LTS",
 			expected: []string{"vm1"},
 		},

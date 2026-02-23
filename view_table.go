@@ -156,7 +156,7 @@ func newTableModel() tableModel {
 		busyVMs:       make(map[string]busyInfo),
 		spinner:       s,
 		columns: []tableColumn{
-			{title: "Name", width: 12, minWidth: 8, priority: 0},  // width set dynamically
+			{title: "Name", width: 12, minWidth: 8, priority: 0}, // width set dynamically
 			{title: "State", width: 12, minWidth: 10, priority: 0},
 			{title: "Snaps", width: 7, minWidth: 5, priority: 5},
 			{title: "IPv4", width: 16, minWidth: 12, priority: 2},
@@ -1024,7 +1024,7 @@ func (m tableModel) renderFooter() string {
 	}
 	statusLine := formHintStyle.Render(statusContent)
 
-	return sep + "\n" + footerStyle.Render(footerLines + "\n" + statusLine)
+	return sep + "\n" + footerStyle.Render(footerLines+"\n"+statusLine)
 }
 
 func renderShortcutLine(shortcuts []struct{ key, desc string }) string {

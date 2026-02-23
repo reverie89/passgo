@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,6 +72,11 @@ type rootModel struct {
 	// Context for returning to sub-views after operations
 	lastMountVM string
 	lastSnapVM  string
+
+	// VM list fetch coordination (prevents overlapping fetch commands).
+	vmListFetchInFlight     bool
+	vmListFetchPending      bool
+	vmListPendingBackground bool
 }
 
 // setChildSizes stamps the current terminal dimensions onto every child model.
@@ -109,7 +115,42 @@ func initialModel() rootModel {
 		currentView: viewLoading,
 		table:       newTableModel(),
 		loading:     newLoadingModel("Loading VMs…"),
+		// Init schedules fetchVMListCmd immediately.
+		vmListFetchInFlight: true,
 	}
+}
+
+func (m *rootModel) requestVMListFetch(background bool) tea.Cmd {
+	if m.vmListFetchInFlight {
+		if !m.vmListFetchPending {
+			m.vmListFetchPending = true
+			m.vmListPendingBackground = background
+		} else if !background {
+			// Foreground refresh takes priority over pending background refresh.
+			m.vmListPendingBackground = false
+		}
+		return nil
+	}
+
+	m.vmListFetchInFlight = true
+	if background {
+		return fetchVMListBackgroundCmd()
+	}
+	return fetchVMListCmd()
+}
+
+func (m *rootModel) dequeuePendingVMListFetch() tea.Cmd {
+	if !m.vmListFetchPending {
+		return nil
+	}
+	background := m.vmListPendingBackground
+	m.vmListFetchPending = false
+	m.vmListPendingBackground = false
+
+	if background && m.currentView != viewTable {
+		return nil
+	}
+	return m.requestVMListFetch(background)
 }
 
 func (m rootModel) Init() tea.Cmd {
@@ -164,20 +205,22 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Only auto-refresh when we're on the table view
 		cmds := []tea.Cmd{autoRefreshTickCmd()} // always reschedule
 		if m.currentView == viewTable {
-			cmds = append(cmds, fetchVMListBackgroundCmd())
+			if cmd := m.requestVMListFetch(true); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
 		return m, tea.Batch(cmds...)
 
 	// ── Async results ──
 	case vmListResultMsg:
+		m.vmListFetchInFlight = false
+
 		if msg.err != nil {
-			if msg.background {
-				// Silently ignore background fetch errors
-				return m, nil
+			if !msg.background {
+				m.errModal = newErrorModel("VM List Error", msg.err.Error())
+				m.setChildSizes()
+				m.currentView = viewError
 			}
-			m.errModal = newErrorModel("VM List Error", msg.err.Error())
-			m.setChildSizes()
-			m.currentView = viewError
 		} else {
 			m.table.setVMs(msg.vms)
 			m.table.lastRefresh = time.Now()
@@ -185,7 +228,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentView = viewTable
 			}
 		}
-		return m, nil
+		return m, m.dequeuePendingVMListFetch()
 
 	case vmInfoResultMsg:
 		if m.currentView == viewInfo {
@@ -216,7 +259,10 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			toastCmd := m.table.addToast(
 				fmt.Sprintf("✗ %s failed: %s", msg.operation, msg.err.Error()), "error")
 			if msg.inline {
-				return m, tea.Batch(toastCmd, fetchVMListBackgroundCmd())
+				if refreshCmd := m.requestVMListFetch(true); refreshCmd != nil {
+					return m, tea.Batch(toastCmd, refreshCmd)
+				}
+				return m, toastCmd
 			}
 			m.errModal = newErrorModel("Operation Error", msg.err.Error())
 			m.setChildSizes()
@@ -230,7 +276,10 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Inline operations: stay on table, refresh in background
 		if msg.inline {
-			return m, tea.Batch(toastCmd, fetchVMListBackgroundCmd())
+			if refreshCmd := m.requestVMListFetch(true); refreshCmd != nil {
+				return m, tea.Batch(toastCmd, refreshCmd)
+			}
+			return m, toastCmd
 		}
 
 		// Return to mount/snap manager if that's where we came from
@@ -251,7 +300,10 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = newLoadingModel("Refreshing…")
 		m.setChildSizes()
 		m.currentView = viewLoading
-		return m, tea.Batch(m.loading.Init(), fetchVMListCmd(), toastCmd)
+		if refreshCmd := m.requestVMListFetch(false); refreshCmd != nil {
+			return m, tea.Batch(m.loading.Init(), refreshCmd, toastCmd)
+		}
+		return m, tea.Batch(m.loading.Init(), toastCmd)
 
 	case snapshotListResultMsg:
 		if msg.err != nil {
@@ -281,7 +333,10 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = newLoadingModel("Refreshing…")
 		m.setChildSizes()
 		m.currentView = viewLoading
-		return m, tea.Batch(m.loading.Init(), fetchVMListCmd())
+		if refreshCmd := m.requestVMListFetch(false); refreshCmd != nil {
+			return m, tea.Batch(m.loading.Init(), refreshCmd)
+		}
+		return m, m.loading.Init()
 
 	case confirmResultMsg:
 		if msg.confirmed && m.pendingCmd != nil {
@@ -336,9 +391,7 @@ func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setChildSizes()
 		m.currentView = viewLoading
 		return m, tea.Batch(m.loading.Init(), func() tea.Msg {
-			// Unmount old, then mount new
-			_, _ = runMultipassCommand("umount", msg.vmName+":"+msg.oldTarget)
-			_, err := runMultipassCommand("mount", msg.newSource, msg.vmName+":"+msg.newTarget)
+			err := runMountModifyOperation(runMultipassCommand, msg.vmName, msg.oldTarget, msg.newSource, msg.newTarget)
 			return vmOperationResultMsg{vmName: msg.vmName, operation: "mount", err: err}
 		})
 	}
@@ -512,7 +565,10 @@ func (m rootModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loading = newLoadingModel("Refreshing…")
 			m.setChildSizes()
 			m.currentView = viewLoading
-			return m, tea.Batch(m.loading.Init(), fetchVMListCmd())
+			if refreshCmd := m.requestVMListFetch(false); refreshCmd != nil {
+				return m, tea.Batch(m.loading.Init(), refreshCmd)
+			}
+			return m, m.loading.Init()
 		case "f":
 			m.table.toggleFilter()
 			return m, nil
@@ -706,31 +762,124 @@ func operationToastMessage(vmName, operation string, elapsed time.Duration) stri
 // ─── Sort (moved from old main.go) ────────────────────────────────────────────
 
 func sortVMs(vms []vmData, column int, ascending bool) {
-	sort.Slice(vms, func(i, j int) bool {
-		var less bool
-		switch column {
-		case 0:
-			less = strings.ToLower(vms[i].info.Name) < strings.ToLower(vms[j].info.Name)
-		case 1:
-			less = strings.ToLower(vms[i].info.State) < strings.ToLower(vms[j].info.State)
-		case 2:
-			less = vms[i].info.Snapshots < vms[j].info.Snapshots
-		case 3:
-			less = vms[i].info.IPv4 < vms[j].info.IPv4
-		case 4:
-			less = vms[i].info.CPUs < vms[j].info.CPUs
-		case 5:
-			less = vms[i].info.DiskUsage < vms[j].info.DiskUsage
-		case 6:
-			less = vms[i].info.MemoryUsage < vms[j].info.MemoryUsage
-		default:
-			less = false
+	sort.SliceStable(vms, func(i, j int) bool {
+		cmp := compareVMByColumn(vms[i], vms[j], column)
+		if cmp == 0 {
+			cmp = compareStringsFold(vms[i].info.Name, vms[j].info.Name)
 		}
-		if !ascending {
-			less = !less
+		if ascending {
+			return cmp < 0
 		}
-		return less
+		return cmp > 0
 	})
+}
+
+func compareVMByColumn(a, b vmData, column int) int {
+	switch column {
+	case 0:
+		return compareStringsFold(a.info.Name, b.info.Name)
+	case 1:
+		return compareStringsFold(a.info.State, b.info.State)
+	case 2:
+		return compareIntegerFields(a.info.Snapshots, b.info.Snapshots)
+	case 3:
+		return compareStringsFold(a.info.IPv4, b.info.IPv4)
+	case 4:
+		return compareIntegerFields(a.info.CPUs, b.info.CPUs)
+	case 5:
+		return compareUsageFields(a.info.DiskUsage, b.info.DiskUsage)
+	case 6:
+		return compareUsageFields(a.info.MemoryUsage, b.info.MemoryUsage)
+	default:
+		return 0
+	}
+}
+
+func compareUsageFields(a, b string) int {
+	aFrac, aOK := parseUsageFraction(a)
+	bFrac, bOK := parseUsageFraction(b)
+
+	switch {
+	case aOK && bOK:
+		return compareFloat64(aFrac, bFrac)
+	case aOK:
+		return 1
+	case bOK:
+		return -1
+	default:
+		return compareStringsFold(a, b)
+	}
+}
+
+func compareIntegerFields(a, b string) int {
+	aInt, aOK := parseIntField(a)
+	bInt, bOK := parseIntField(b)
+
+	switch {
+	case aOK && bOK:
+		return compareInt(aInt, bInt)
+	case aOK:
+		return 1
+	case bOK:
+		return -1
+	default:
+		return compareStringsFold(a, b)
+	}
+}
+
+func parseIntField(raw string) (int, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "--" {
+		return 0, false
+	}
+	if n, err := strconv.Atoi(raw); err == nil {
+		return n, true
+	}
+	var n int
+	if _, err := fmt.Sscanf(raw, "%d", &n); err == nil {
+		return n, true
+	}
+	return 0, false
+}
+
+func compareStringsFold(a, b string) int {
+	return strings.Compare(strings.ToLower(a), strings.ToLower(b))
+}
+
+func compareInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareFloat64(a, b float64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func runMountModifyOperation(runCmd func(args ...string) (string, error), vmName, oldTarget, newSource, newTarget string) error {
+	oldMount := vmName + ":" + oldTarget
+	if _, err := runCmd("umount", oldMount); err != nil {
+		return fmt.Errorf("failed to unmount %s: %w", oldMount, err)
+	}
+
+	newMount := vmName + ":" + newTarget
+	if _, err := runCmd("mount", newSource, newMount); err != nil {
+		return fmt.Errorf("failed to mount %s to %s: %w", newSource, newMount, err)
+	}
+
+	return nil
 }
 
 // ─── Logger ────────────────────────────────────────────────────────────────────

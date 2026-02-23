@@ -5,19 +5,19 @@ import "github.com/charmbracelet/lipgloss"
 
 // theme holds all configurable colors for the TUI.
 type theme struct {
-	Name       string
-	Accent     lipgloss.Color
+	Name        string
+	Accent      lipgloss.Color
 	AccentLight lipgloss.Color
-	Subtle     lipgloss.Color
-	Dimmed     lipgloss.Color
-	Highlight  lipgloss.Color
-	Surface    lipgloss.Color
-	Text       lipgloss.Color // normal cell text
-	TextMuted  lipgloss.Color // secondary text (values, descriptions)
-	Running    lipgloss.Color
-	Stopped    lipgloss.Color
-	Suspended  lipgloss.Color
-	Deleted    lipgloss.Color
+	Subtle      lipgloss.Color
+	Dimmed      lipgloss.Color
+	Highlight   lipgloss.Color
+	Surface     lipgloss.Color
+	Text        lipgloss.Color // normal cell text
+	TextMuted   lipgloss.Color // secondary text (values, descriptions)
+	Running     lipgloss.Color
+	Stopped     lipgloss.Color
+	Suspended   lipgloss.Color
+	Deleted     lipgloss.Color
 }
 
 // themes is the list of available themes, selectable via keys 1–0.

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -153,40 +154,16 @@ func DeleteSnapshot(vmName, snapshotName string) (string, error) {
 
 // ScanCloudInitFiles finds YAML files with "#cloud-config" header for VM configuration
 func ScanCloudInitFiles() ([]string, error) {
-	var cloudInitFiles []string
-	currentDir, err := os.Getwd()
+	options, err := scanCloudInitTemplateOptions(appSearchDirs())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get current directory: %v", err)
-	}
-	files, err := os.ReadDir(currentDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read directory: %v", err)
+		return nil, err
 	}
 
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-		fileName := file.Name()
-		if !strings.HasSuffix(strings.ToLower(fileName), ".yml") && !strings.HasSuffix(strings.ToLower(fileName), ".yaml") {
-			continue
-		}
-
-		filePath := filepath.Join(currentDir, fileName)
-		fileHandle, err := os.Open(filePath) // #nosec G304 -- path from Getwd+ReadDir
-		if err != nil {
-			continue
-		}
-		scanner := bufio.NewScanner(fileHandle)
-		if scanner.Scan() {
-			firstLine := strings.TrimSpace(scanner.Text())
-			if firstLine == "#cloud-config" {
-				cloudInitFiles = append(cloudInitFiles, fileName)
-			}
-		}
-		_ = fileHandle.Close()
+	files := make([]string, 0, len(options))
+	for _, opt := range options {
+		files = append(files, opt.Label)
 	}
-	return cloudInitFiles, nil
+	return files, nil
 }
 
 // LaunchVMWithCloudInit creates VM with cloud-init.
@@ -215,21 +192,127 @@ type TemplateOption struct {
 	Path  string
 }
 
-// ReadConfigGithubRepo reads the hidden .config file in the current directory and extracts the github-cloud-init-repo value
-func ReadConfigGithubRepo() (string, error) {
-	currentDir, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current directory: %v", err)
+var errConfigRepoNotFound = errors.New("github-cloud-init-repo not found")
+
+func appSearchDirs() []string {
+	exePath, _ := os.Executable()
+	cwd, _ := os.Getwd()
+	return appSearchDirsFrom(exePath, cwd)
+}
+
+func appSearchDirsFrom(exePath, cwd string) []string {
+	var dirs []string
+
+	if exePath != "" {
+		dirs = append(dirs, filepath.Dir(exePath))
 	}
-	configPath := filepath.Join(currentDir, ".config")
-	if appLogger != nil {
-		appLogger.Printf("reading config: %s", configPath)
+	if cwd != "" {
+		dirs = append(dirs, cwd)
 	}
-	file, err := os.Open(configPath) // #nosec G304 -- .config in current dir
-	if err != nil {
-		if appLogger != nil {
-			appLogger.Printf("config open error: %v", err)
+
+	seen := make(map[string]struct{}, len(dirs))
+	var deduped []string
+	for _, dir := range dirs {
+		normalized := normalizePath(dir)
+		if normalized == "" {
+			continue
 		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		deduped = append(deduped, normalized)
+	}
+	return deduped
+}
+
+func normalizePath(path string) string {
+	if path == "" {
+		return ""
+	}
+	clean := filepath.Clean(path)
+	if abs, err := filepath.Abs(clean); err == nil {
+		return abs
+	}
+	return clean
+}
+
+func isYAMLFileName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".yaml")
+}
+
+func hasCloudConfigHeader(filePath string) bool {
+	fileHandle, err := os.Open(filePath) // #nosec G304 -- discovered from app search dirs
+	if err != nil {
+		return false
+	}
+	defer fileHandle.Close()
+
+	scanner := bufio.NewScanner(fileHandle)
+	if scanner.Scan() {
+		return strings.TrimSpace(scanner.Text()) == "#cloud-config"
+	}
+	return false
+}
+
+func scanCloudInitTemplateOptions(searchDirs []string) ([]TemplateOption, error) {
+	seenPaths := make(map[string]struct{})
+	seenLabels := make(map[string]string)
+	var options []TemplateOption
+
+	var firstErr error
+	for _, dir := range searchDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to read directory %s: %w", dir, err)
+			}
+			continue
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			fileName := entry.Name()
+			if !isYAMLFileName(fileName) {
+				continue
+			}
+
+			filePath := normalizePath(filepath.Join(dir, fileName))
+			if filePath == "" || !hasCloudConfigHeader(filePath) {
+				continue
+			}
+			if _, exists := seenPaths[filePath]; exists {
+				continue
+			}
+
+			label := fileName
+			if existingPath, exists := seenLabels[label]; exists && existingPath != filePath {
+				candidate := fmt.Sprintf("%s (%s)", fileName, filepath.Base(dir))
+				if _, conflict := seenLabels[candidate]; conflict {
+					candidate = fmt.Sprintf("%s (%s)", fileName, dir)
+				}
+				label = candidate
+			}
+
+			seenPaths[filePath] = struct{}{}
+			seenLabels[label] = filePath
+			options = append(options, TemplateOption{Label: label, Path: filePath})
+		}
+	}
+
+	if len(options) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+
+	return options, nil
+}
+
+func readConfigGithubRepoFromFile(configPath string) (string, error) {
+	file, err := os.Open(configPath) // #nosec G304 -- path from app search dirs
+	if err != nil {
 		return "", err
 	}
 	defer file.Close()
@@ -244,31 +327,60 @@ func ReadConfigGithubRepo() (string, error) {
 		if !strings.Contains(line, key) {
 			continue
 		}
-		// Extract the substring following the key, preserving URL colons
 		idx := strings.Index(line, key)
 		if idx < 0 {
 			continue
 		}
 		rest := strings.TrimSpace(line[idx+len(key):])
-		// Remove one leading separator if present
 		if strings.HasPrefix(rest, "=") || strings.HasPrefix(rest, ":") {
 			rest = strings.TrimSpace(rest[1:])
 		}
-		// Remove optional additional whitespace separators
 		rest = strings.TrimLeft(rest, " \t")
-		// Drop optional leading '@'
 		rest = strings.TrimPrefix(rest, "@")
 		if rest != "" {
-			if appLogger != nil {
-				appLogger.Printf("config repo url: %s", rest)
-			}
 			return rest, nil
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return "", err
 	}
+	return "", errConfigRepoNotFound
+}
+
+func readConfigGithubRepoFromDirs(searchDirs []string) (string, error) {
+	var firstErr error
+
+	for _, dir := range searchDirs {
+		configPath := filepath.Join(dir, ".config")
+		if appLogger != nil {
+			appLogger.Printf("reading config: %s", configPath)
+		}
+
+		repoURL, err := readConfigGithubRepoFromFile(configPath)
+		if err == nil {
+			if appLogger != nil {
+				appLogger.Printf("config repo url: %s", repoURL)
+			}
+			return repoURL, nil
+		}
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errConfigRepoNotFound) {
+			continue
+		}
+
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	if firstErr != nil {
+		return "", firstErr
+	}
 	return "", fmt.Errorf("github-cloud-init-repo not found in .config")
+}
+
+// ReadConfigGithubRepo reads .config from preferred app search directories.
+func ReadConfigGithubRepo() (string, error) {
+	return readConfigGithubRepoFromDirs(appSearchDirs())
 }
 
 // CloneRepoAndScanYAMLs clones the provided repo into a temp dir and returns cloud-init YAML templates found
@@ -332,12 +444,10 @@ func GetAllCloudInitTemplateOptions() ([]TemplateOption, []string, error) {
 	var all []TemplateOption
 	var cleanupDirs []string
 
-	// Local templates (current dir)
-	local, err := ScanCloudInitFiles()
+	// Local templates (preferred search dirs)
+	local, err := scanCloudInitTemplateOptions(appSearchDirs())
 	if err == nil {
-		for _, name := range local {
-			all = append(all, TemplateOption{Label: name, Path: filepath.Join(".", name)})
-		}
+		all = append(all, local...)
 		if appLogger != nil {
 			appLogger.Printf("found %d local cloud-init templates", len(local))
 		}
